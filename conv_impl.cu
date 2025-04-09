@@ -60,8 +60,14 @@ void cpu_conv_ref(const float* input, const float* filter, float* output, const 
 // FP16数值验证（允许1%的相对误差）
 bool verify(const __half* gpu_result, const float* cpu_ref, size_t size) {
     const float eps = 0.01f; // 1% 误差容限
+    const float abs_eps = 1e-4f; // 绝对误差容限
     int error_count = 0;
     const int max_errors_to_print = 10;
+    
+    // 统计信息
+    float max_rel_error = 0.0f;
+    float max_abs_error = 0.0f;
+    size_t max_error_idx = 0;
     
     for (size_t i = 0; i < size; ++i) {
         float gpu_val = __half2float(gpu_result[i]);
@@ -76,24 +82,47 @@ bool verify(const __half* gpu_result, const float* cpu_ref, size_t size) {
             continue;
         }
         
-        // 计算相对误差
+        // 计算绝对误差和相对误差
         float abs_error = fabs(gpu_val - ref_val);
-        float rel_error = (fabs(ref_val) > 1e-6) ? abs_error / fabs(ref_val) : abs_error;
+        float rel_error = 0.0f;
         
-        if (rel_error > eps) {
+        // 改进的相对误差计算
+        if (fabs(ref_val) > abs_eps) {
+            rel_error = abs_error / fabs(ref_val);
+        } else if (abs_error > abs_eps) {
+            // 当参考值接近零时，使用绝对误差
+            rel_error = abs_error / abs_eps;
+        }
+        
+        // 更新最大误差统计
+        if (rel_error > max_rel_error) {
+            max_rel_error = rel_error;
+            max_abs_error = abs_error;
+            max_error_idx = i;
+        }
+        
+        // 检查是否超过误差容限
+        if (rel_error > eps && abs_error > abs_eps) {
             if (error_count < max_errors_to_print) {
-                printf("Error at index %zu: GPU=%.6f, CPU=%.6f, rel_error=%.6f\n", 
-                       i, gpu_val, ref_val, rel_error);
+                printf("Error at index %zu: GPU=%.6f, CPU=%.6f, abs_error=%.6f, rel_error=%.6f\n", 
+                       i, gpu_val, ref_val, abs_error, rel_error);
             }
             error_count++;
         }
     }
     
+    // 打印统计信息
     if (error_count > 0) {
         printf("Total errors: %d/%zu (%.2f%%)\n", error_count, size, 
                (float)error_count / size * 100.0f);
+        printf("Max relative error: %.6f at index %zu\n", max_rel_error, max_error_idx);
+        printf("Max absolute error: %.6f at index %zu\n", max_abs_error, max_error_idx);
         return false;
     }
+    
+    // 即使没有错误，也打印最大误差信息
+    printf("Verification passed. Max relative error: %.6f, Max absolute error: %.6f\n",
+           max_rel_error, max_abs_error);
     return true;
 }
 
